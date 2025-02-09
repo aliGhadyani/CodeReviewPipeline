@@ -1,0 +1,27 @@
+{
+    "Python": {
+        "rules": [
+            "Follow PEP8",
+            "Avoid print() in production, use logging",
+            "Ensure proper exception handling",
+            "Check for security vulnerabilities (eval, os.system, SQL injection)",
+            "Avoid deeply nested loops"
+        ]
+    },
+    "JavaScript": {
+        "rules": [
+            "Avoid var, use let or const",
+            "Ensure ESLint rules are followed",
+            "Handle async functions with proper error handling",
+            "Detect deeply nested callbacks (callback hell)"
+        ]
+    },
+    "Java": {
+        "rules": [
+            "Follow CamelCase conventions",
+            "Use final where applicable",
+            "Ensure proper resource management (use try-with-resources)",
+            "Avoid memory leaks (close streams properly)"
+        ]
+    }
+}
