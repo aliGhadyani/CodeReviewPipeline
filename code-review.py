@@ -4,6 +4,7 @@ import subprocess
 import ollama
 import git
 import sys
+import re
 from pathlib import Path
 
 # Load repository path from input argument
@@ -66,6 +67,10 @@ def run_static_analysis():
     # C / C++ / Java (Using Clang-Tidy)
     subprocess.run(["clang-tidy", "-p", REPO_PATH], check=False)
 
+# Remove <think> tags from DeepSeek-R1:1.5B output
+def clean_ai_output(text):
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
 # AI-powered code review using Ollama
 def ai_code_review(file_path):
     language = detect_language(file_path)
@@ -87,8 +92,8 @@ def ai_code_review(file_path):
     {code_content}
     """
 
-    response = ollama.chat(model="deepseek-r1:1.5b", messages=[{"role": "user", "content": prompt}])
-    return response['message']['content']
+    response = ollama.chat(model="deepseek-r1:8b", messages=[{"role": "user", "content": prompt}])
+    return clean_ai_output(response['message']['content'])
 
 # Generate AI Review Report
 def generate_report(reviews):
@@ -96,7 +101,7 @@ def generate_report(reviews):
     with open(report_path, "w") as report:
         report.write("# Code Review Report\n\n")
         for file, feedback in reviews.items():
-            report.write(f"## {file}\n\n```\n{feedback}\n```\n\n")
+            report.write(f"## {file}\n\n{feedback}\n\n")
     print(f"Report generated: {report_path}")
     return report_path
 
@@ -121,8 +126,9 @@ def get_gitignore_patterns():
     with open(gitignore_path, "r") as f:
         for line in f:
             line = line.strip()
-            if line and not line.startswith("#"):
+            if line and not line.startswith("#"):  # Ignore comments
                 patterns.append(line)
+
     return patterns
 
 # Check if a file is ignored based on .gitignore patterns
@@ -166,4 +172,4 @@ if __name__ == "__main__":
         print(f"AI Feedback:\n{feedback}")
 
     report_path = generate_report(reviews)
-    send_slack_notification(report_path)
+    # send_slack_notification(report_path)
