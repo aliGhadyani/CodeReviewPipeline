@@ -1,175 +1,183 @@
 import os
 import json
 import subprocess
-import ollama
-import git
 import sys
 import re
+import git
 from pathlib import Path
+import ollama
 
-# Load repository path from input argument
+# -------------------------------
+# Helper Functions
+# -------------------------------
+
+# Clean the AI output by removing <think> tags.
+def clean_ai_output(text):
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+# Load repository path from input argument.
 if len(sys.argv) < 2:
     print("Usage: python code_review.py <repository_path>")
     sys.exit(1)
-
 REPO_PATH = sys.argv[1]
 
-# Load rules from JSON file
+# Load rules from rules.json.
 def load_rules():
     with open("rules.json", "r") as file:
         return json.load(file)
-
 RULES = load_rules()
 
-# Mapping file extensions to languages
+# Mapping file extensions to languages.
 EXT_TO_LANG = {
-    ".py": "Python",
-    ".js": "JavaScript",
-    ".ts": "TypeScript",
-    ".java": "Java",
-    ".c": "C",
     ".cpp": "C++",
-    ".cs": "C#",
-    ".go": "Go",
-    ".rb": "Ruby",
-    ".php": "PHP",
-    ".rs": "Rust",
-    ".swift": "Swift",
-    ".kt": "Kotlin",
-    ".html": "HTML",
-    ".css": "CSS",
-    ".sh": "Shell",
-    ".sql": "SQL"
+    ".cc": "C++",
+    ".cxx": "C++",
+    ".h": "C++",
+    ".hpp": "C++"
+    # Add other extensions for other languages if needed.
 }
 
-# Detect programming language based on file extension
 def detect_language(file_path):
     ext = os.path.splitext(file_path)[1]
     return EXT_TO_LANG.get(ext, "Unknown")
 
-# Fetch latest code changes
+# Get .gitignore patterns.
+def get_gitignore_patterns():
+    gitignore_path = os.path.join(REPO_PATH, ".gitignore")
+    if not os.path.exists(gitignore_path):
+        return []
+    patterns = []
+    with open(gitignore_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                patterns.append(line)
+    return patterns
+
+# Check if a file should be ignored based on .gitignore patterns.
+def is_ignored(file_path, ignored_patterns):
+    relative_path = os.path.relpath(file_path, REPO_PATH)
+    for pattern in ignored_patterns:
+        # Simple check: if the relative path starts with the pattern (for directories)
+        if pattern.endswith("/") and relative_path.startswith(pattern):
+            return True
+        # For file patterns, check for equality or prefix match.
+        elif relative_path == pattern or relative_path.startswith(pattern):
+            return True
+    return False
+
+# Recursively get all files (ignoring those in .gitignore).
+def get_all_files():
+    ignored_patterns = get_gitignore_patterns()
+    all_files = []
+    for root, _, files in os.walk(REPO_PATH):
+        for file in files:
+            # Skip hidden files.
+            if file.startswith("."):
+                continue
+            file_path = os.path.join(root, file)
+            if detect_language(file_path) != "Unknown" and not is_ignored(file_path, ignored_patterns):
+                all_files.append(file_path)
+    return all_files
+
+# -------------------------------
+# AI Review Functions
+# -------------------------------
+
+# Perform AI code review for each category for a given file.
+def ai_code_review_by_category(file_path):
+    language = detect_language(file_path)
+    if language == "Unknown":
+        return {"General": "Skipping file (unknown language)."}
+    
+    # Retrieve the category rules for the language.
+    # In our sample, we only have rules for C++.
+    language_rules = RULES.get(language, {})
+    if not language_rules:
+        return {"General": "No rules defined for this language."}
+    
+    with open(file_path, "r") as f:
+        code_content = f.read()
+    
+    category_feedback = {}
+    # For each review category (e.g., Memory Safety, Syntax, Security, Performance)
+    for category, rules_list in language_rules.items():
+        formatted_rules = "\n".join([f"- {rule}" for rule in rules_list])
+        prompt = f"""
+Review the following {language} code for **{category}** issues based on following rules and nothing more:
+{formatted_rules}
+
+Code:
+{code_content}
+"""
+        try:
+            response = ollama.chat(
+                model="deepseek-r1:8b",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            feedback = clean_ai_output(response['message']['content'])
+        except Exception as e:
+            feedback = f"Error during review: {str(e)}"
+        category_feedback[category] = feedback
+    return category_feedback
+
+# -------------------------------
+# Report Generation
+# -------------------------------
+
+# Generate a Markdown report with separate sections for each file and category.
+def generate_report(reviews):
+    report_path = os.path.join(REPO_PATH, "code_review_report.md")
+    with open(report_path, "w") as report:
+        report.write("# Code Review Report\n\n")
+        for file, categories in reviews.items():
+            report.write(f"## File: {os.path.relpath(file, REPO_PATH)}\n\n")
+            for category, feedback in categories.items():
+                report.write(f"### {category} Review\n\n")
+                report.write(feedback)
+                report.write("\n\n")
+    print(f"Report generated: {report_path}")
+    return report_path
+
+# -------------------------------
+# Other Functions (Static Analysis, Slack)
+# -------------------------------
+
 def get_latest_code():
     repo = git.Repo(REPO_PATH)
     repo.git.pull()
     print("Pulled latest code.")
 
-# Run static analysis tools
 def run_static_analysis():
     print("Running static analysis...")
-
-    # Python
-    subprocess.run(["flake8", REPO_PATH], check=False)
-    subprocess.run(["bandit", "-r", REPO_PATH], check=False)
-
-    # JavaScript / TypeScript
-    subprocess.run(["eslint", REPO_PATH], check=False)
-
-    # C / C++ / Java (Using Clang-Tidy)
+    # Example: run clang-tidy for C++ code (customize as needed)
     subprocess.run(["clang-tidy", "-p", REPO_PATH], check=False)
 
-# Remove <think> tags from DeepSeek-R1:1.5B output
-def clean_ai_output(text):
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-
-# AI-powered code review using Ollama
-def ai_code_review(file_path):
-    language = detect_language(file_path)
-    if language == "Unknown":
-        return f"Skipping {file_path}, unknown language."
-
-    rules = RULES.get(language, {}).get("rules", ["No specific rules available."])
-    formatted_rules = "\n".join([f"- {rule}" for rule in rules])
-
-    with open(file_path, "r") as f:
-        code_content = f.read()
-
-    prompt = f"""
-    Review the following {language} code based on these rules:
-
-    {formatted_rules}
-
-    Code:
-    {code_content}
-    """
-
-    response = ollama.chat(model="deepseek-r1:8b", messages=[{"role": "user", "content": prompt}])
-    return clean_ai_output(response['message']['content'])
-
-# Generate AI Review Report
-def generate_report(reviews):
-    report_path = os.path.join(REPO_PATH, "code_review_report.md")
-    with open(report_path, "w") as report:
-        report.write("# Code Review Report\n\n")
-        for file, feedback in reviews.items():
-            report.write(f"## {file}\n\n{feedback}\n\n")
-    print(f"Report generated: {report_path}")
-    return report_path
-
-# Send report to Slack (optional)
 def send_slack_notification(report_path):
     SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
     if not SLACK_WEBHOOK_URL:
         print("No Slack Webhook URL found, skipping Slack notification.")
         return
-
     message = f"Code Review Completed! Report available at: {report_path}"
-    subprocess.run(["curl", "-X", "POST", "-H", "Content-type: application/json", 
+    subprocess.run(["curl", "-X", "POST", "-H", "Content-type: application/json",
                     "--data", f'{{"text": "{message}"}}', SLACK_WEBHOOK_URL])
 
-# Read .gitignore and return ignored patterns
-def get_gitignore_patterns():
-    gitignore_path = os.path.join(REPO_PATH, ".gitignore")
-    if not os.path.exists(gitignore_path):
-        return []
-
-    patterns = []
-    with open(gitignore_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#"):  # Ignore comments
-                patterns.append(line)
-
-    return patterns
-
-# Check if a file is ignored based on .gitignore patterns
-def is_ignored(file_path, ignored_patterns):
-    relative_path = os.path.relpath(file_path, REPO_PATH)
-    for pattern in ignored_patterns:
-        if pattern.endswith("/"):
-            if relative_path.startswith(pattern):
-                return True
-        elif relative_path == pattern or relative_path.startswith(pattern):
-            return True
-    return False
-
-# Get all files in the repository (excluding .gitignore files)
-def get_all_files():
-    ignored_patterns = get_gitignore_patterns()
-    all_files = []
-    
-    for root, _, files in os.walk(REPO_PATH):
-        for file in files:
-            if file.startswith("."):  # Skip hidden files
-                continue
-            file_path = os.path.join(root, file)
-            if detect_language(file_path) != "Unknown" and not is_ignored(file_path, ignored_patterns):
-                all_files.append(file_path)
-    
-    return all_files
-
+# -------------------------------
 # Main Execution
+# -------------------------------
+
 if __name__ == "__main__":
     get_latest_code()
     # run_static_analysis()
 
     files_to_review = get_all_files()
-
     reviews = {}
     for file in files_to_review:
         print(f"Reviewing {file}...")
-        feedback = ai_code_review(file)
-        reviews[file] = feedback
-        print(f"AI Feedback:\n{feedback}")
-
+        category_feedback = ai_code_review_by_category(file)
+        reviews[file] = category_feedback
+        for category, feedback in category_feedback.items():
+            print(f"--- {category} Review ---\n{feedback}\n")
+    
     report_path = generate_report(reviews)
     # send_slack_notification(report_path)

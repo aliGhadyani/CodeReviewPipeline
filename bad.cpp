@@ -3,11 +3,11 @@
 
 class Test {
 public:
-    Test(int v) : value(v) {} // Constructor initializes value
-    void show() { std::cout << "Value: " << value << std::endl; }
+    Test(int v) : value_me(v) {} // Constructor initializes value
+    void show() { std::cout << "Value: " << value_me << std::endl; }
     
 private:
-    int* value; // Incorrectly allocated memory (should be an int, not a pointer)
+    int* value_me; // Incorrectly allocated memory (should be an int, not a pointer)
 };
 
 void memoryLeakFunction() {
